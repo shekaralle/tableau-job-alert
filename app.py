@@ -16,10 +16,15 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Global Job Alert Bot Running"
+    return "Job Alert Bot Running"
 
-# Telegram alert
+
+# TELEGRAM ALERT
 def send_telegram(message):
+
+    if not BOT_TOKEN or not CHAT_ID:
+        print("Telegram credentials missing")
+        return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
@@ -28,26 +33,74 @@ def send_telegram(message):
         "text": message
     }
 
-    requests.post(url, data=data)
+    try:
+        requests.post(url, data=data)
+    except Exception as e:
+        print(e)
 
 
-# WORKDAY companies
+# LINKEDIN SCANNER
+def check_linkedin():
+
+    print("Checking LinkedIn...")
+
+    url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+
+    params = {
+        "keywords": "Tableau",
+        "location": "Pune",
+        "start": 0
+    }
+
+    try:
+
+        response = requests.get(url, params=params)
+
+        text = response.text
+
+        jobs = text.split("href=")
+
+        for job in jobs:
+
+            if "linkedin.com/jobs/view" in job:
+
+                link = job.split('"')[1]
+
+                if link not in SEEN_JOBS:
+
+                    SEEN_JOBS.add(link)
+
+                    message = f"""
+New Tableau Job Found on LinkedIn!
+
+Location: Pune
+
+Apply: {link}
+"""
+
+                    send_telegram(message)
+
+    except Exception as e:
+        print(e)
+
+
+# WORKDAY SCANNER
 WORKDAY_COMPANIES = [
     "genpact",
     "mastercard",
     "barclays",
     "accenture",
-    "wipro",
     "infosys",
+    "wipro",
     "deloitte",
     "ey",
     "pwc",
-    "kpmg",
-    "amazon",
     "citi"
 ]
 
 def check_workday():
+
+    print("Checking Workday companies...")
 
     for company in WORKDAY_COMPANIES:
 
@@ -68,142 +121,13 @@ def check_workday():
                 location = job.get("locationsText", "")
                 link = f"https://{company}.wd5.myworkdayjobs.com{job.get('externalPath','')}"
 
-                process_job(company, title, location, link)
+                if LOCATION.lower() in location.lower() and "tableau" in title.lower():
 
-        except:
-            pass
+                    if link not in SEEN_JOBS:
 
+                        SEEN_JOBS.add(link)
 
-# GREENHOUSE companies
-GREENHOUSE_COMPANIES = [
-    "coinbase",
-    "airbnb",
-    "stripe",
-    "shopify",
-    "twilio",
-    "databricks",
-    "doordash"
-]
-
-def check_greenhouse():
-
-    for company in GREENHOUSE_COMPANIES:
-
-        url = f"https://boards-api.greenhouse.io/v1/boards/{company}/jobs"
-
-        try:
-
-            response = requests.get(url)
-
-            data = response.json()
-
-            for job in data.get("jobs", []):
-
-                title = job.get("title", "")
-                location = job.get("location", {}).get("name", "")
-                link = job.get("absolute_url", "")
-
-                process_job(company, title, location, link)
-
-        except:
-            pass
-
-
-# LEVER companies
-LEVER_COMPANIES = [
-    "netflix",
-    "canva",
-    "atlassian",
-    "uber",
-    "palantir"
-]
-
-def check_lever():
-
-    for company in LEVER_COMPANIES:
-
-        url = f"https://api.lever.co/v0/postings/{company}?mode=json"
-
-        try:
-
-            response = requests.get(url)
-
-            data = response.json()
-
-            for job in data:
-
-                title = job.get("text", "")
-                location = job.get("categories", {}).get("location", "")
-                link = job.get("hostedUrl", "")
-
-                process_job(company, title, location, link)
-
-        except:
-            pass
-
-
-# Microsoft
-def check_microsoft():
-
-    url = "https://gcsservices.careers.microsoft.com/search/api/v1/search"
-
-    try:
-
-        params = {"l": "Pune"}
-
-        response = requests.get(url, params=params)
-
-        data = response.json()
-
-        for job in data.get("operationResult", {}).get("result", {}).get("jobs", []):
-
-            title = job.get("title", "")
-            location = job.get("properties", {}).get("locations", [""])[0]
-            link = f"https://jobs.careers.microsoft.com/global/en/job/{job.get('jobId')}"
-
-            process_job("Microsoft", title, location, link)
-
-    except:
-        pass
-
-
-# Google
-def check_google():
-
-    url = "https://careers.google.com/api/v3/search/"
-
-    try:
-
-        response = requests.get(url)
-
-        data = response.json()
-
-        for job in data.get("jobs", []):
-
-            title = job.get("title", "")
-            location = job.get("locations", [""])[0]
-            link = job.get("apply_url", "")
-
-            process_job("Google", title, location, link)
-
-    except:
-        pass
-
-
-# Common processor
-def process_job(company, title, location, link):
-
-    if LOCATION.lower() in location.lower():
-
-        for keyword in KEYWORDS:
-
-            if keyword.lower() in title.lower():
-
-                if link not in SEEN_JOBS:
-
-                    SEEN_JOBS.add(link)
-
-                    message = f"""
+                        message = f"""
 New Tableau Job Found!
 
 Company: {company}
@@ -213,23 +137,23 @@ Location: {location}
 Apply: {link}
 """
 
-                    send_telegram(message)
+                        send_telegram(message)
+
+        except Exception as e:
+            print(e)
 
 
-# Main loop
+# MAIN LOOP
 def job_checker():
 
-    send_telegram("Global Job Alert Bot Started")
+    send_telegram("Job Alert Bot Started Successfully")
 
     while True:
 
-        print("Scanning all career websites...")
+        print("Scanning all websites...")
 
+        check_linkedin()
         check_workday()
-        check_greenhouse()
-        check_lever()
-        check_microsoft()
-        check_google()
 
         time.sleep(300)
 
