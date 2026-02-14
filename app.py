@@ -3,6 +3,7 @@ import time
 import os
 import threading
 from flask import Flask
+from datetime import datetime, timedelta, timezone
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -11,6 +12,9 @@ KEYWORDS = ["tableau"]
 LOCATION = "pune"
 
 SEEN_JOBS = set()
+
+# Only allow jobs from last 12 hours
+TIME_THRESHOLD = datetime.now(timezone.utc) - timedelta(hours=12)
 
 app = Flask(__name__)
 
@@ -23,7 +27,7 @@ def home():
 def send_telegram(message):
 
     if not BOT_TOKEN or not CHAT_ID:
-        print("Telegram credentials missing")
+        print("Missing Telegram credentials")
         return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -39,6 +43,22 @@ def send_telegram(message):
         print(e)
 
 
+# Check if job is recent
+def is_recent(timestamp_ms):
+
+    try:
+
+        job_time = datetime.fromtimestamp(
+            timestamp_ms / 1000,
+            timezone.utc
+        )
+
+        return job_time >= TIME_THRESHOLD
+
+    except:
+        return False
+
+
 # LINKEDIN SCANNER
 def check_linkedin():
 
@@ -49,6 +69,7 @@ def check_linkedin():
     params = {
         "keywords": "Tableau",
         "location": "Pune",
+        "f_TPR": "r43200",  # last 12 hours (43200 seconds)
         "start": 0
     }
 
@@ -71,7 +92,7 @@ def check_linkedin():
                     SEEN_JOBS.add(link)
 
                     message = f"""
-New Tableau Job Found on LinkedIn!
+New Tableau Job (Last 12 hrs) — LinkedIn
 
 Location: Pune
 
@@ -94,13 +115,12 @@ WORKDAY_COMPANIES = [
     "wipro",
     "deloitte",
     "ey",
-    "pwc",
-    "citi"
+    "pwc"
 ]
 
 def check_workday():
 
-    print("Checking Workday companies...")
+    print("Checking Workday...")
 
     for company in WORKDAY_COMPANIES:
 
@@ -120,6 +140,18 @@ def check_workday():
                 title = job.get("title", "")
                 location = job.get("locationsText", "")
                 link = f"https://{company}.wd5.myworkdayjobs.com{job.get('externalPath','')}"
+                posted = job.get("postedOn")
+
+                if not posted:
+                    continue
+
+                # Convert Workday timestamp
+                posted_time = job.get("postedOn", 0)
+
+                if isinstance(posted_time, int):
+
+                    if not is_recent(posted_time):
+                        continue
 
                 if LOCATION.lower() in location.lower() and "tableau" in title.lower():
 
@@ -128,7 +160,7 @@ def check_workday():
                         SEEN_JOBS.add(link)
 
                         message = f"""
-New Tableau Job Found!
+New Tableau Job (Last 12 hrs)
 
 Company: {company}
 Title: {title}
@@ -146,11 +178,11 @@ Apply: {link}
 # MAIN LOOP
 def job_checker():
 
-    send_telegram("Job Alert Bot Started Successfully")
+    send_telegram("Job Alert Bot Started — Filtering last 12 hours only")
 
     while True:
 
-        print("Scanning all websites...")
+        print("Scanning jobs from last 12 hours...")
 
         check_linkedin()
         check_workday()
