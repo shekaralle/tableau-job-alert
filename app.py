@@ -1,6 +1,8 @@
 import requests
 import time
 import os
+import threading
+from flask import Flask
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
@@ -10,7 +12,14 @@ LOCATION = "pune"
 
 SEEN_JOBS = set()
 
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Job Alert Bot Running"
+
 def send_telegram(message):
+    
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
     data = {
@@ -20,42 +29,27 @@ def send_telegram(message):
     
     requests.post(url, data=data)
 
-def fetch_workday_jobs():
+def job_checker():
     
-    url = "https://wd5.myworkdayjobs.com/wday/cxs/wday/job"
+    send_telegram("Job Alert Bot Started Successfully")
     
-    try:
-        response = requests.get(url)
-        data = response.json()
+    while True:
         
-        for job in data.get("jobPostings", []):
-            
-            title = job.get("title", "")
-            location = job.get("locationsText", "")
-            link = job.get("externalPath", "")
-            
-            if LOCATION.lower() in location.lower() and any(k in title.lower() for k in KEYWORDS):
-                
-                if link not in SEEN_JOBS:
-                    
-                    SEEN_JOBS.add(link)
-                    
-                    message = f"""
-New Tableau Job!
+        print("Checking jobs...")
+        
+        # test message every 10 mins
+        # remove later
+        # send_telegram("Bot still running")
+        
+        time.sleep(600)
 
-Title: {title}
-Location: {location}
+def run_bot():
+    threading.Thread(target=job_checker).start()
 
-https://wd5.myworkdayjobs.com{link}
-"""
-                    
-                    send_telegram(message)
-                    
-    except Exception as e:
-        print(e)
-
-while True:
+if __name__ == "__main__":
     
-    fetch_workday_jobs()
+    run_bot()
     
-    time.sleep(300)
+    port = int(os.environ.get("PORT", 10000))
+    
+    app.run(host="0.0.0.0", port=port)
