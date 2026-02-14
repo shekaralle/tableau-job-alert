@@ -2,20 +2,25 @@ import requests
 import time
 import os
 import threading
+import re
 from flask import Flask
 from datetime import datetime, timedelta, timezone
 
+# Telegram credentials from Render environment
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
+# Filters
 KEYWORDS = ["tableau"]
 LOCATION = "pune"
 
-SEEN_JOBS = set()
-
-# Only allow jobs from last 12 hours
+# Only jobs from last 12 hours
 TIME_THRESHOLD = datetime.now(timezone.utc) - timedelta(hours=12)
 
+# Store seen jobs to avoid duplicates
+SEEN_JOBS = set()
+
+# Flask app required for Render
 app = Flask(__name__)
 
 @app.route('/')
@@ -23,7 +28,7 @@ def home():
     return "Job Alert Bot Running"
 
 
-# TELEGRAM ALERT
+# TELEGRAM ALERT FUNCTION
 def send_telegram(message):
 
     if not BOT_TOKEN or not CHAT_ID:
@@ -39,11 +44,12 @@ def send_telegram(message):
 
     try:
         requests.post(url, data=data)
+        print("Alert sent")
     except Exception as e:
-        print(e)
+        print("Telegram error:", e)
 
 
-# Check if job is recent
+# CHECK IF JOB IS WITHIN LAST 12 HOURS
 def is_recent(timestamp_ms):
 
     try:
@@ -69,7 +75,7 @@ def check_linkedin():
     params = {
         "keywords": "Tableau",
         "location": "Pune",
-        "f_TPR": "r43200",  # last 12 hours (43200 seconds)
+        "f_TPR": "r43200",  # last 12 hours
         "start": 0
     }
 
@@ -77,35 +83,38 @@ def check_linkedin():
 
         response = requests.get(url, params=params)
 
-        text = response.text
+        html = response.text
 
-        jobs = text.split("href=")
+        # Extract job IDs safely
+        job_ids = re.findall(
+            r'data-entity-urn="urn:li:jobPosting:(\d+)"',
+            html
+        )
 
-        for job in jobs:
+        for job_id in job_ids:
 
-            if "linkedin.com/jobs/view" in job:
+            link = f"https://www.linkedin.com/jobs/view/{job_id}"
 
-                link = job.split('"')[1]
+            if link not in SEEN_JOBS:
 
-                if link not in SEEN_JOBS:
+                SEEN_JOBS.add(link)
 
-                    SEEN_JOBS.add(link)
-
-                    message = f"""
-New Tableau Job (Last 12 hrs) — LinkedIn
-
+                message = f"""
+New Tableau Job — LinkedIn
 Location: Pune
+Posted: Last 12 hours
 
-Apply: {link}
+Apply:
+{link}
 """
 
-                    send_telegram(message)
+                send_telegram(message)
 
     except Exception as e:
-        print(e)
+        print("LinkedIn error:", e)
 
 
-# WORKDAY SCANNER
+# WORKDAY COMPANIES
 WORKDAY_COMPANIES = [
     "genpact",
     "mastercard",
@@ -118,9 +127,11 @@ WORKDAY_COMPANIES = [
     "pwc"
 ]
 
+
+# WORKDAY SCANNER
 def check_workday():
 
-    print("Checking Workday...")
+    print("Checking Workday companies...")
 
     for company in WORKDAY_COMPANIES:
 
@@ -140,60 +151,69 @@ def check_workday():
                 title = job.get("title", "")
                 location = job.get("locationsText", "")
                 link = f"https://{company}.wd5.myworkdayjobs.com{job.get('externalPath','')}"
-                posted = job.get("postedOn")
 
-                if not posted:
-                    continue
-
-                # Convert Workday timestamp
                 posted_time = job.get("postedOn", 0)
 
-                if isinstance(posted_time, int):
+                if not posted_time:
+                    continue
 
+                # Only recent jobs
+                if isinstance(posted_time, int):
                     if not is_recent(posted_time):
                         continue
 
-                if LOCATION.lower() in location.lower() and "tableau" in title.lower():
+                # Apply filters
+                if LOCATION.lower() in location.lower() and any(
+                    skill in title.lower() for skill in KEYWORDS
+                ):
 
                     if link not in SEEN_JOBS:
 
                         SEEN_JOBS.add(link)
 
                         message = f"""
-New Tableau Job (Last 12 hrs)
+New Tableau Job — Workday
 
 Company: {company}
 Title: {title}
 Location: {location}
+Posted: Last 12 hours
 
-Apply: {link}
+Apply:
+{link}
 """
 
                         send_telegram(message)
 
         except Exception as e:
-            print(e)
+            print(f"{company} error:", e)
 
 
 # MAIN LOOP
 def job_checker():
 
-    send_telegram("Job Alert Bot Started — Filtering last 12 hours only")
+    send_telegram(
+        "Job Alert Bot Started — Monitoring LinkedIn + Workday (Last 12 hrs)"
+    )
 
     while True:
 
-        print("Scanning jobs from last 12 hours...")
+        print("Scanning jobs...")
 
         check_linkedin()
         check_workday()
 
+        print("Sleeping 5 minutes...\n")
+
         time.sleep(300)
 
 
+# START BACKGROUND THREAD
 def run_bot():
     threading.Thread(target=job_checker).start()
 
 
+# MAIN ENTRY
 if __name__ == "__main__":
 
     run_bot()
