@@ -3,24 +3,38 @@ import time
 import os
 import threading
 import re
+import json
 from flask import Flask
 from datetime import datetime, timedelta, timezone
 
-# Telegram credentials from Render environment
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID")
 
-# Filters
 KEYWORDS = ["tableau"]
 LOCATION = "pune"
 
-# Only jobs from last 12 hours
 TIME_THRESHOLD = datetime.now(timezone.utc) - timedelta(hours=12)
 
-# Store seen jobs to avoid duplicates
-SEEN_JOBS = set()
+SEEN_FILE = "seen_jobs.json"
 
-# Flask app required for Render
+# Load seen jobs from file
+def load_seen_jobs():
+
+    if os.path.exists(SEEN_FILE):
+
+        with open(SEEN_FILE, "r") as f:
+            return set(json.load(f))
+
+    return set()
+
+# Save seen jobs
+def save_seen_jobs():
+
+    with open(SEEN_FILE, "w") as f:
+        json.dump(list(SEEN_JOBS), f)
+
+SEEN_JOBS = load_seen_jobs()
+
 app = Flask(__name__)
 
 @app.route('/')
@@ -28,12 +42,7 @@ def home():
     return "Job Alert Bot Running"
 
 
-# TELEGRAM ALERT FUNCTION
 def send_telegram(message):
-
-    if not BOT_TOKEN or not CHAT_ID:
-        print("Missing Telegram credentials")
-        return
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
@@ -44,176 +53,138 @@ def send_telegram(message):
 
     try:
         requests.post(url, data=data)
-        print("Alert sent")
     except Exception as e:
-        print("Telegram error:", e)
+        print(e)
 
 
-# CHECK IF JOB IS WITHIN LAST 12 HOURS
-def is_recent(timestamp_ms):
+def is_recent(posted_time_ms):
 
-    try:
+    job_time = datetime.fromtimestamp(
+        posted_time_ms / 1000,
+        timezone.utc
+    )
 
-        job_time = datetime.fromtimestamp(
-            timestamp_ms / 1000,
-            timezone.utc
-        )
-
-        return job_time >= TIME_THRESHOLD
-
-    except:
-        return False
+    return job_time >= TIME_THRESHOLD
 
 
-# LINKEDIN SCANNER
+# FIXED LINKEDIN SCANNER
 def check_linkedin():
 
-    print("Checking LinkedIn...")
+    print("Checking LinkedIn")
 
     url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 
     params = {
         "keywords": "Tableau",
         "location": "Pune",
-        "f_TPR": "r43200",  # last 12 hours
-        "start": 0
+        "f_TPR": "r43200"
     }
 
-    try:
+    response = requests.get(url, params=params)
 
-        response = requests.get(url, params=params)
+    html = response.text
 
-        html = response.text
+    job_ids = re.findall(
+        r'data-entity-urn="urn:li:jobPosting:(\d+)"',
+        html
+    )
 
-        # Extract job IDs safely
-        job_ids = re.findall(
-            r'data-entity-urn="urn:li:jobPosting:(\d+)"',
-            html
+    for job_id in job_ids:
+
+        link = f"https://www.linkedin.com/jobs/view/{job_id}"
+
+        if link in SEEN_JOBS:
+            continue
+
+        SEEN_JOBS.add(link)
+        save_seen_jobs()
+
+        send_telegram(
+            f"LinkedIn Tableau Job (Last 12 hrs)\n{link}"
         )
 
-        for job_id in job_ids:
 
-            link = f"https://www.linkedin.com/jobs/view/{job_id}"
-
-            if link not in SEEN_JOBS:
-
-                SEEN_JOBS.add(link)
-
-                message = f"""
-New Tableau Job — LinkedIn
-Location: Pune
-Posted: Last 12 hours
-
-Apply:
-{link}
-"""
-
-                send_telegram(message)
-
-    except Exception as e:
-        print("LinkedIn error:", e)
-
-
-# WORKDAY COMPANIES
-WORKDAY_COMPANIES = [
-    "genpact",
-    "mastercard",
-    "barclays",
-    "accenture",
-    "infosys",
-    "wipro",
-    "deloitte",
-    "ey",
-    "pwc"
+# CORRECT WORKDAY ENDPOINTS
+WORKDAY_URLS = [
+    ("Genpact", "https://genpact.wd5.myworkdayjobs.com/wday/cxs/genpact/genpactcareers/jobs"),
+    ("Mastercard", "https://mastercard.wd1.myworkdayjobs.com/wday/cxs/mastercard/mastercardcareers/jobs"),
+    ("Barclays", "https://barclays.wd3.myworkdayjobs.com/wday/cxs/barclays/barclayscareers/jobs"),
 ]
 
 
-# WORKDAY SCANNER
 def check_workday():
 
-    print("Checking Workday companies...")
+    print("Checking Workday")
 
-    for company in WORKDAY_COMPANIES:
-
-        url = f"https://{company}.wd5.myworkdayjobs.com/wday/cxs/{company}/{company}/jobs"
+    for company, url in WORKDAY_URLS:
 
         try:
 
             response = requests.get(url)
 
-            if response.status_code != 200:
-                continue
-
             data = response.json()
 
             for job in data.get("jobPostings", []):
 
-                title = job.get("title", "")
-                location = job.get("locationsText", "")
-                link = f"https://{company}.wd5.myworkdayjobs.com{job.get('externalPath','')}"
+                title = job["title"]
+                location = job["locationsText"]
 
-                posted_time = job.get("postedOn", 0)
+                link = url.split("/wday")[0] + job["externalPath"]
 
-                if not posted_time:
+                posted = job.get("postedOn")
+
+                if not posted:
                     continue
 
-                # Only recent jobs
-                if isinstance(posted_time, int):
-                    if not is_recent(posted_time):
-                        continue
+                if not is_recent(posted):
+                    continue
 
-                # Apply filters
-                if LOCATION.lower() in location.lower() and any(
-                    skill in title.lower() for skill in KEYWORDS
-                ):
+                if LOCATION.lower() not in location.lower():
+                    continue
 
-                    if link not in SEEN_JOBS:
+                if "tableau" not in title.lower():
+                    continue
 
-                        SEEN_JOBS.add(link)
+                if link in SEEN_JOBS:
+                    continue
 
-                        message = f"""
-New Tableau Job — Workday
+                SEEN_JOBS.add(link)
+                save_seen_jobs()
+
+                send_telegram(
+                    f"""
+Workday Tableau Job
 
 Company: {company}
 Title: {title}
 Location: {location}
-Posted: Last 12 hours
 
 Apply:
 {link}
 """
-
-                        send_telegram(message)
+                )
 
         except Exception as e:
-            print(f"{company} error:", e)
+
+            print(company, "error:", e)
 
 
-# MAIN LOOP
 def job_checker():
 
-    send_telegram(
-        "Job Alert Bot Started — Monitoring LinkedIn + Workday (Last 12 hrs)"
-    )
+    send_telegram("Bot Started — Monitoring Tableau Jobs Pune")
 
     while True:
-
-        print("Scanning jobs...")
 
         check_linkedin()
         check_workday()
 
-        print("Sleeping 5 minutes...\n")
-
         time.sleep(300)
 
 
-# START BACKGROUND THREAD
 def run_bot():
     threading.Thread(target=job_checker).start()
 
 
-# MAIN ENTRY
 if __name__ == "__main__":
 
     run_bot()
