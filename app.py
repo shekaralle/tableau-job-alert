@@ -109,6 +109,8 @@ WORKDAY_URLS = [
     ("Genpact", "https://genpact.wd5.myworkdayjobs.com/wday/cxs/genpact/genpactcareers/jobs"),
     ("Mastercard", "https://mastercard.wd1.myworkdayjobs.com/wday/cxs/mastercard/mastercardcareers/jobs"),
     ("Barclays", "https://barclays.wd3.myworkdayjobs.com/wday/cxs/barclays/barclayscareers/jobs"),
+    ("Citi", "https://citi.wd3.myworkdayjobs.com/wday/cxs/citi/citicareers/jobs"),
+    ("Salesforce", "https://careers.salesforce.com/en/jobs/?search=")
 ]
 
 
