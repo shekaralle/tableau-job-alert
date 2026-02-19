@@ -13,8 +13,6 @@ CHAT_ID = os.environ.get("CHAT_ID")
 KEYWORDS = ["tableau"]
 LOCATION = "pune"
 
-TIME_THRESHOLD = datetime.now(timezone.utc) - timedelta(hours=12)
-
 SEEN_FILE = "seen_jobs.json"
 
 def load_seen_jobs():
@@ -52,6 +50,11 @@ def send_telegram(message):
         print(e)
 
 
+def keyword_match(title):
+
+    return any(keyword in title.lower() for keyword in KEYWORDS)
+
+
 # LINKEDIN
 def check_linkedin():
 
@@ -85,7 +88,7 @@ def check_linkedin():
         send_telegram(f"LinkedIn Tableau Job\n{link}")
 
 
-# WORKDAY (includes Deloitte USI + Barclays)
+# WORKDAY
 WORKDAY_URLS = [
 
 ("Deloitte USI",
@@ -95,28 +98,20 @@ WORKDAY_URLS = [
 "https://barclays.wd3.myworkdayjobs.com/wday/cxs/barclays/External_Career_Site/jobs"),
 
 ("Mastercard CorporateCareers",
-"https://mastercard.wd1.myworkdayjobs.com/wday/cxs/mastercard/CorporateCareers/jobs"),
-
-("Genpact",
-"https://genpact.wd5.myworkdayjobs.com/wday/cxs/genpact/genpactcareers/jobs"),
-
-("Accenture",
-"https://accenture.wd3.myworkdayjobs.com/wday/cxs/accenture/AccentureCareers/jobs")
+"https://mastercard.wd1.myworkdayjobs.com/wday/cxs/mastercard/CorporateCareers/jobs")
 
 ]
 
 
 def check_workday():
 
-    print("Scanning Workday Companies")
+    print("Scanning Workday")
 
     for company, url in WORKDAY_URLS:
 
         try:
 
-            response = requests.get(url)
-
-            data = response.json()
+            data = requests.get(url).json()
 
             for job in data.get("jobPostings", []):
 
@@ -126,7 +121,7 @@ def check_workday():
                 if LOCATION not in location.lower():
                     continue
 
-                if "tableau" not in title.lower():
+                if not keyword_match(title):
                     continue
 
                 link = url.split("/wday")[0] + job.get("externalPath","")
@@ -138,11 +133,10 @@ def check_workday():
                 save_seen_jobs()
 
                 send_telegram(
-f"""Workday Job
+f"""Workday Tableau Job
 
 Company: {company}
 Title: {title}
-Location: {location}
 
 {link}"""
                 )
@@ -151,10 +145,10 @@ Location: {location}
             print(company, e)
 
 
-# BARCLAYS DIRECT SEARCH PORTAL
+# BARCLAYS PORTAL
 def check_barclays_portal():
 
-    print("Scanning Barclays portal")
+    print("Scanning Barclays Portal")
 
     try:
 
@@ -162,14 +156,20 @@ def check_barclays_portal():
 
         response = requests.get(url)
 
-        links = re.findall(
-            r'href="(/job/[^\"]+)"',
-            response.text
+        jobs = re.findall(
+            r'<a class="job-title".*?href="([^"]+)".*?>(.*?)</a>',
+            response.text,
+            re.DOTALL
         )
 
-        for path in links:
+        for link_path, title in jobs:
 
-            link = "https://search.jobs.barclays" + path
+            title_clean = re.sub('<.*?>', '', title).strip()
+
+            if not keyword_match(title_clean):
+                continue
+
+            link = "https://search.jobs.barclays" + link_path
 
             if link in SEEN_JOBS:
                 continue
@@ -177,7 +177,13 @@ def check_barclays_portal():
             SEEN_JOBS.add(link)
             save_seen_jobs()
 
-            send_telegram(f"Barclays Job\n{link}")
+            send_telegram(
+f"""Barclays Tableau Job
+
+Title: {title_clean}
+
+{link}"""
+            )
 
     except Exception as e:
         print(e)
@@ -192,13 +198,11 @@ def check_citi():
 
         url = "https://jobs.citi.com/api/jobs"
 
-        params = {
-            "location":"Pune"
-        }
+        params = {"location":"Pune"}
 
         data = requests.get(url, params=params).json()
 
-        for job in data.get("jobs",[]):
+        for job in data.get("jobs", []):
 
             title = job.get("title","")
             location = job.get("location","")
@@ -207,7 +211,7 @@ def check_citi():
             if LOCATION not in location.lower():
                 continue
 
-            if "tableau" not in title.lower():
+            if not keyword_match(title):
                 continue
 
             if link in SEEN_JOBS:
@@ -217,10 +221,9 @@ def check_citi():
             save_seen_jobs()
 
             send_telegram(
-f"""Citi Job
+f"""Citi Tableau Job
 
 Title: {title}
-Location: {location}
 
 {link}"""
             )
@@ -240,14 +243,20 @@ def check_maersk():
 
         response = requests.get(url)
 
-        links = re.findall(
-            r'href="(/careers/vacancies/[^\"]+)"',
-            response.text
+        jobs = re.findall(
+            r'href="(/careers/vacancies/[^"]+)".*?>(.*?)</a>',
+            response.text,
+            re.DOTALL
         )
 
-        for path in links:
+        for link_path, title in jobs:
 
-            link = "https://www.maersk.com" + path
+            title_clean = re.sub('<.*?>', '', title).strip()
+
+            if not keyword_match(title_clean):
+                continue
+
+            link = "https://www.maersk.com" + link_path
 
             if link in SEEN_JOBS:
                 continue
@@ -255,7 +264,13 @@ def check_maersk():
             SEEN_JOBS.add(link)
             save_seen_jobs()
 
-            send_telegram(f"Maersk Job\n{link}")
+            send_telegram(
+f"""Maersk Tableau Job
+
+Title: {title_clean}
+
+{link}"""
+            )
 
     except Exception as e:
         print(e)
@@ -272,14 +287,20 @@ def check_pepsico():
 
         response = requests.get(url)
 
-        links = re.findall(
-            r'href="(/main/job/[^\"]+)"',
-            response.text
+        jobs = re.findall(
+            r'href="(/main/job/[^"]+)".*?>(.*?)</a>',
+            response.text,
+            re.DOTALL
         )
 
-        for path in links:
+        for link_path, title in jobs:
 
-            link = "https://www.pepsicojobs.com" + path
+            title_clean = re.sub('<.*?>', '', title).strip()
+
+            if not keyword_match(title_clean):
+                continue
+
+            link = "https://www.pepsicojobs.com" + link_path
 
             if link in SEEN_JOBS:
                 continue
@@ -287,7 +308,13 @@ def check_pepsico():
             SEEN_JOBS.add(link)
             save_seen_jobs()
 
-            send_telegram(f"PepsiCo Job\n{link}")
+            send_telegram(
+f"""PepsiCo Tableau Job
+
+Title: {title_clean}
+
+{link}"""
+            )
 
     except Exception as e:
         print(e)
@@ -296,7 +323,7 @@ def check_pepsico():
 # MAIN LOOP
 def job_checker():
 
-    send_telegram("Bot started - monitoring all companies")
+    send_telegram("Bot started - monitoring Tableau jobs in Pune")
 
     while True:
 
