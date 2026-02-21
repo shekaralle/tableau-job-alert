@@ -15,7 +15,7 @@ KEYWORD = "tableau"
 SEEN_FILE = "seen_jobs.json"
 
 # -------------------------
-# Persistent storage
+# Load seen jobs
 # -------------------------
 
 def load_seen_jobs():
@@ -44,9 +44,9 @@ SEEN_JOBS = load_seen_jobs()
 
 def send_telegram(message):
 
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
     try:
+
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
         requests.post(url, json={
 
@@ -64,7 +64,7 @@ def send_telegram(message):
 
 
 # -------------------------
-# Keyword match in full text
+# Keyword matcher
 # -------------------------
 
 def contains_tableau(text):
@@ -73,7 +73,7 @@ def contains_tableau(text):
 
 
 # -------------------------
-# Flask app (Render required)
+# Flask app
 # -------------------------
 
 app = Flask(__name__)
@@ -96,7 +96,7 @@ def check_linkedin():
 
     params = {
 
-        "keywords": "",
+        "keywords": "tableau",
 
         "location": "Pune",
 
@@ -119,52 +119,27 @@ def check_linkedin():
         link = f"https://www.linkedin.com/jobs/view/{job_id}"
 
         if link in SEEN_JOBS:
-
             continue
 
-        try:
+        SEEN_JOBS.add(link)
+        save_seen_jobs()
 
-            job_page = requests.get(link)
-
-            full_text = job_page.text.lower()
-
-            if not contains_tableau(full_text):
-
-                continue
-
-            SEEN_JOBS.add(link)
-
-            save_seen_jobs()
-
-            send_telegram(
-
-f"""Tableau Job Found — LinkedIn
-
-Apply:
-{link}"""
-            )
-
-        except:
-
-            pass
+        send_telegram(f"Tableau Job Found — LinkedIn\n{link}")
 
 
 # -------------------------
 # WORKDAY SCANNER
 # -------------------------
 
-WORKDAY_URLS = [
+WORKDAY_COMPANIES = [
 
 ("Deloitte USI",
-
 "https://deloitte.wd1.myworkdayjobs.com/wday/cxs/deloitte/USIExternalCareerSite/jobs"),
 
 ("Barclays",
-
 "https://barclays.wd3.myworkdayjobs.com/wday/cxs/barclays/External_Career_Site/jobs"),
 
 ("Mastercard",
-
 "https://mastercard.wd1.myworkdayjobs.com/wday/cxs/mastercard/CorporateCareers/jobs")
 
 ]
@@ -174,55 +149,59 @@ def check_workday():
 
     print("Checking Workday companies")
 
-    for company, api_url in WORKDAY_URLS:
+    for company, api_url in WORKDAY_COMPANIES:
 
         try:
 
             response = requests.get(api_url)
 
+            if response.status_code != 200:
+
+                print("Failed:", company)
+
+                continue
+
             data = response.json()
 
             for job in data.get("jobPostings", []):
 
-                location = job.get("locationsText","").lower()
+                location = job.get("locationsText", "").lower()
 
                 if LOCATION not in location:
-
                     continue
 
-                job_path = job.get("externalPath","")
+                title = job.get("title", "")
 
-                full_link = api_url.split("/wday")[0] + job_path
+                external_path = job.get("externalPath", "")
 
-                if full_link in SEEN_JOBS:
+                public_link = api_url.split("/wday")[0] + external_path
 
+                if public_link in SEEN_JOBS:
                     continue
 
-                try:
+                # Fetch detail API (correct endpoint)
+                detail_api = api_url.split("/jobs")[0] + external_path.replace("/job/", "/jobPosting/")
 
-                    job_page = requests.get(full_link)
+                detail_response = requests.get(detail_api)
 
-                    full_text = job_page.text.lower()
+                detail_text = detail_response.text.lower()
 
-                    if not contains_tableau(full_text):
+                full_text = title.lower() + " " + detail_text
 
-                        continue
+                if not contains_tableau(full_text):
+                    continue
 
-                    SEEN_JOBS.add(full_link)
+                SEEN_JOBS.add(public_link)
+                save_seen_jobs()
 
-                    save_seen_jobs()
-
-                    send_telegram(
-
+                send_telegram(
 f"""Tableau Job Found — {company}
 
+Title: {title}
+
 Apply:
-{full_link}"""
-                    )
-
-                except:
-
-                    pass
+{public_link}"""
+                )
 
         except Exception as e:
 
@@ -253,31 +232,27 @@ def check_citi():
 
         for job in data.get("jobs", []):
 
-            link = job.get("applyUrl","")
+            title = job.get("title", "")
 
-            if link in SEEN_JOBS:
+            link = job.get("applyUrl", "")
 
+            location = job.get("location", "").lower()
+
+            if LOCATION not in location:
                 continue
 
-            job_page = requests.get(link)
+            if link in SEEN_JOBS:
+                continue
 
-            full_text = job_page.text.lower()
+            detail = requests.get(link).text.lower()
 
-            if not contains_tableau(full_text):
-
+            if not contains_tableau(title + detail):
                 continue
 
             SEEN_JOBS.add(link)
-
             save_seen_jobs()
 
-            send_telegram(
-
-f"""Tableau Job Found — Citi
-
-Apply:
-{link}"""
-            )
+            send_telegram(f"Tableau Job Found — Citi\n{link}")
 
     except Exception as e:
 
@@ -294,48 +269,28 @@ def check_maersk():
 
     try:
 
-        url = "https://www.maersk.com/careers/vacancies"
+        page = requests.get("https://www.maersk.com/careers/vacancies")
 
-        page = requests.get(url)
-
-        links = re.findall(
-
-            r'href="(/careers/vacancies/[^\"]+)"',
-
-            page.text
-
-        )
+        links = re.findall(r'href="(/careers/vacancies/[^\"]+)"', page.text)
 
         for path in links:
 
             link = "https://www.maersk.com" + path
 
             if link in SEEN_JOBS:
-
                 continue
 
-            job_page = requests.get(link)
+            detail = requests.get(link).text.lower()
 
-            full_text = job_page.text.lower()
-
-            if not contains_tableau(full_text):
-
+            if not contains_tableau(detail):
                 continue
 
             SEEN_JOBS.add(link)
-
             save_seen_jobs()
 
-            send_telegram(
-
-f"""Tableau Job Found — Maersk
-
-Apply:
-{link}"""
-            )
+            send_telegram(f"Tableau Job Found — Maersk\n{link}")
 
     except:
-
         pass
 
 
@@ -349,48 +304,28 @@ def check_pepsico():
 
     try:
 
-        url = "https://www.pepsicojobs.com/main/jobs"
+        page = requests.get("https://www.pepsicojobs.com/main/jobs")
 
-        page = requests.get(url)
-
-        links = re.findall(
-
-            r'href="(/main/job/[^\"]+)"',
-
-            page.text
-
-        )
+        links = re.findall(r'href="(/main/job/[^\"]+)"', page.text)
 
         for path in links:
 
             link = "https://www.pepsicojobs.com" + path
 
             if link in SEEN_JOBS:
-
                 continue
 
-            job_page = requests.get(link)
+            detail = requests.get(link).text.lower()
 
-            full_text = job_page.text.lower()
-
-            if not contains_tableau(full_text):
-
+            if not contains_tableau(detail):
                 continue
 
             SEEN_JOBS.add(link)
-
             save_seen_jobs()
 
-            send_telegram(
-
-f"""Tableau Job Found — PepsiCo
-
-Apply:
-{link}"""
-            )
+            send_telegram(f"Tableau Job Found — PepsiCo\n{link}")
 
     except:
-
         pass
 
 
@@ -422,17 +357,13 @@ def job_checker():
 
 
 # -------------------------
-# Background thread
+# Run bot
 # -------------------------
 
 def run_bot():
 
     threading.Thread(target=job_checker).start()
 
-
-# -------------------------
-# Start app
-# -------------------------
 
 if __name__ == "__main__":
 
