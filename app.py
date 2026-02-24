@@ -1,9 +1,7 @@
 import requests
-import time
 import os
 import re
 import json
-import threading
 from flask import Flask
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
@@ -14,104 +12,67 @@ KEYWORD = "tableau"
 
 SEEN_FILE = "seen_jobs.json"
 
-# -------------------------
-# Load seen jobs
-# -------------------------
+# --------------------------
+# Load & Save Seen Jobs
+# --------------------------
 
 def load_seen_jobs():
-
     if os.path.exists(SEEN_FILE):
-
         with open(SEEN_FILE, "r") as f:
-
             return set(json.load(f))
-
     return set()
 
-
 def save_seen_jobs():
-
     with open(SEEN_FILE, "w") as f:
-
         json.dump(list(SEEN_JOBS), f)
-
 
 SEEN_JOBS = load_seen_jobs()
 
-# -------------------------
-# Telegram alert
-# -------------------------
+# --------------------------
+# Telegram Alert
+# --------------------------
 
 def send_telegram(message):
 
+    if not BOT_TOKEN or not CHAT_ID:
+        return
+
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
     try:
-
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
         requests.post(url, json={
-
             "chat_id": CHAT_ID,
-
             "text": message
-
         })
+    except:
+        pass
 
-        print("Alert sent")
-
-    except Exception as e:
-
-        print("Telegram error:", e)
-
-
-# -------------------------
-# Keyword matcher
-# -------------------------
+# --------------------------
+# Keyword Check
+# --------------------------
 
 def contains_tableau(text):
-
     return KEYWORD in text.lower()
 
-
-# -------------------------
-# Flask app
-# -------------------------
-
-app = Flask(__name__)
-
-@app.route("/")
-def home():
-
-    return "Tableau Job Bot Running"
-
-
-# -------------------------
-# LINKEDIN SCANNER
-# -------------------------
+# --------------------------
+# LINKEDIN
+# --------------------------
 
 def check_linkedin():
-
-    print("Checking LinkedIn")
 
     url = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 
     params = {
-
         "keywords": "tableau",
-
         "location": "Pune",
-
         "f_TPR": "r86400"
-
     }
 
     response = requests.get(url, params=params)
 
     job_ids = re.findall(
-
         r'data-entity-urn="urn:li:jobPosting:(\d+)"',
-
         response.text
-
     )
 
     for job_id in job_ids:
@@ -124,12 +85,11 @@ def check_linkedin():
         SEEN_JOBS.add(link)
         save_seen_jobs()
 
-        send_telegram(f"Tableau Job Found — LinkedIn\n{link}")
+        send_telegram(f"Tableau Job — LinkedIn\n{link}")
 
-
-# -------------------------
-# WORKDAY SCANNER
-# -------------------------
+# --------------------------
+# WORKDAY (Deloitte, Barclays, Mastercard)
+# --------------------------
 
 WORKDAY_COMPANIES = [
 
@@ -144,10 +104,7 @@ WORKDAY_COMPANIES = [
 
 ]
 
-
 def check_workday():
-
-    print("Checking Workday companies")
 
     for company, api_url in WORKDAY_COMPANIES:
 
@@ -156,9 +113,6 @@ def check_workday():
             response = requests.get(api_url)
 
             if response.status_code != 200:
-
-                print("Failed:", company)
-
                 continue
 
             data = response.json()
@@ -171,61 +125,42 @@ def check_workday():
                     continue
 
                 title = job.get("title", "")
+                link = api_url.split("/wday")[0] + job.get("externalPath", "")
 
-                external_path = job.get("externalPath", "")
-
-                public_link = api_url.split("/wday")[0] + external_path
-
-                if public_link in SEEN_JOBS:
+                if link in SEEN_JOBS:
                     continue
 
-                # Fetch detail API (correct endpoint)
-                detail_api = api_url.split("/jobs")[0] + external_path.replace("/job/", "/jobPosting/")
-
-                detail_response = requests.get(detail_api)
-
-                detail_text = detail_response.text.lower()
-
-                full_text = title.lower() + " " + detail_text
-
-                if not contains_tableau(full_text):
+                # Workday already filters by title search internally,
+                # so we check title only (stable approach)
+                if not contains_tableau(title):
                     continue
 
-                SEEN_JOBS.add(public_link)
+                SEEN_JOBS.add(link)
                 save_seen_jobs()
 
                 send_telegram(
-f"""Tableau Job Found — {company}
+f"""Tableau Job — {company}
 
 Title: {title}
 
-Apply:
-{public_link}"""
+{link}"""
                 )
 
-        except Exception as e:
+        except:
+            pass
 
-            print(company, "error:", e)
-
-
-# -------------------------
-# CITI SCANNER
-# -------------------------
+# --------------------------
+# CITI
+# --------------------------
 
 def check_citi():
-
-    print("Checking Citi")
 
     try:
 
         url = "https://jobs.citi.com/api/jobs"
 
         params = {
-
-            "location": "Pune",
-
-            "limit": 50
-
+            "location": "Pune"
         }
 
         data = requests.get(url, params=params).json()
@@ -233,142 +168,39 @@ def check_citi():
         for job in data.get("jobs", []):
 
             title = job.get("title", "")
-
-            link = job.get("applyUrl", "")
-
             location = job.get("location", "").lower()
+            link = job.get("applyUrl", "")
 
             if LOCATION not in location:
                 continue
 
-            if link in SEEN_JOBS:
+            if not contains_tableau(title):
                 continue
 
-            detail = requests.get(link).text.lower()
-
-            if not contains_tableau(title + detail):
+            if link in SEEN_JOBS:
                 continue
 
             SEEN_JOBS.add(link)
             save_seen_jobs()
 
-            send_telegram(f"Tableau Job Found — Citi\n{link}")
-
-    except Exception as e:
-
-        print("Citi error:", e)
-
-
-# -------------------------
-# MAERSK SCANNER
-# -------------------------
-
-def check_maersk():
-
-    print("Checking Maersk")
-
-    try:
-
-        page = requests.get("https://www.maersk.com/careers/vacancies")
-
-        links = re.findall(r'href="(/careers/vacancies/[^\"]+)"', page.text)
-
-        for path in links:
-
-            link = "https://www.maersk.com" + path
-
-            if link in SEEN_JOBS:
-                continue
-
-            detail = requests.get(link).text.lower()
-
-            if not contains_tableau(detail):
-                continue
-
-            SEEN_JOBS.add(link)
-            save_seen_jobs()
-
-            send_telegram(f"Tableau Job Found — Maersk\n{link}")
+            send_telegram(f"Tableau Job — Citi\n{link}")
 
     except:
         pass
 
+# --------------------------
+# FLASK ROUTE (CRON TRIGGER)
+# --------------------------
 
-# -------------------------
-# PEPSICO SCANNER
-# -------------------------
+app = Flask(__name__)
 
-def check_pepsico():
+@app.route("/")
+def trigger_scan():
 
-    print("Checking PepsiCo")
+    print("Cron triggered scan")
 
-    try:
+    check_linkedin()
+    check_workday()
+    check_citi()
 
-        page = requests.get("https://www.pepsicojobs.com/main/jobs")
-
-        links = re.findall(r'href="(/main/job/[^\"]+)"', page.text)
-
-        for path in links:
-
-            link = "https://www.pepsicojobs.com" + path
-
-            if link in SEEN_JOBS:
-                continue
-
-            detail = requests.get(link).text.lower()
-
-            if not contains_tableau(detail):
-                continue
-
-            SEEN_JOBS.add(link)
-            save_seen_jobs()
-
-            send_telegram(f"Tableau Job Found — PepsiCo\n{link}")
-
-    except:
-        pass
-
-
-# -------------------------
-# MAIN LOOP
-# -------------------------
-
-def job_checker():
-
-    send_telegram("Tableau Job Bot Started")
-
-    while True:
-
-        print("Scanning all companies")
-
-        check_linkedin()
-
-        check_workday()
-
-        check_citi()
-
-        check_maersk()
-
-        check_pepsico()
-
-        print("Sleeping 5 minutes")
-
-        time.sleep(300)
-
-
-# -------------------------
-# Run bot
-# -------------------------
-
-def run_bot():
-
-    threading.Thread(target=job_checker).start()
-
-
-if __name__ == "__main__":
-
-    run_bot()
-
-    port = int(os.environ.get("PORT", 10000))
-
-    app.run(host="0.0.0.0", port=port)
+    return "Scan completed"
